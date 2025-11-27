@@ -1,0 +1,53 @@
+# Git files
+.git
+.gitignore
+
+# Environment files (should be provided at runtime)
+!.env.example
+
+# Development files
+*.md
+!README.md
+
+# SQLite database files (not needed in container)
+*.db
+*.db-shm
+*.db-wal
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+testdata/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker files (no need to copy into image)
+Dockerfile
+.dockerignore
+
+# CI/CD files
+.github
+.gitlab-ci.yml
+
+# Documentation
+docs/
