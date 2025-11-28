@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: web-ssh-config
-data:
-  google-redirect-url: "https://your-domain.com/auth/google/callback"
-  frontend-url: "https://your-frontend-domain.com"
