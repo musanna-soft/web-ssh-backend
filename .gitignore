@@ -31,8 +31,8 @@ web-ssh-server
 .DS_Store
 Thumbs.db
 
-# Kubernetes secrets (IMPORTANT!)
-k8s/secret.yaml
+# test files
+docker-compose.test.yml
 
 # Temporary files
 tmp/

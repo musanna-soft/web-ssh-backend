@@ -3,6 +3,7 @@
 .gitignore
 
 # Environment files (should be provided at runtime)
+.env
 !.env.example
 
 # Development files
@@ -51,3 +52,7 @@ Dockerfile
 
 # Documentation
 docs/
+
+# Docker Compose
+docker-compose.yml
+docker-compose.*.yml

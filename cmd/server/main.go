@@ -21,7 +21,10 @@ import (
 func main() {
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+		dsn := os.Getenv("DB_PATH")
+		if dsn == "" {
+			log.Println("No .env file found")
+		}
 	}
 
 	// Initialize subsystems
