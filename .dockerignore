@@ -4,11 +4,7 @@
 
 # Environment files (should be provided at runtime)
 .env
-!.env.example
-
-# Development files
-*.md
-!README.md
+.env.example
 
 # SQLite database files (not needed in container)
 *.db
@@ -52,6 +48,7 @@ Dockerfile
 
 # Documentation
 docs/
+README.md
 
 # Docker Compose
 docker-compose.yml
