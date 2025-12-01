@@ -1,0 +1,100 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Docker Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ secrets.REGISTRY }}/${{ github.repository }}
+        tags: |
+          type=sha,prefix=main-,format=short
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+
+  update-gitops:
+    name: Update GitOps Repo
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    
+    steps:
+    - name: Checkout GitOps repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ secrets.K8S_REPO }}
+        token: ${{ secrets.GITOPS_PAT }}
+        
+    - name: Update image tag
+      run: |
+        # Get the short SHA tag
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        IMAGE_TAG="${{ secrets.REGISTRY }}/${{ github.repository }}:main-${SHORT_SHA}"
+        
+        echo "Updating image to: $IMAGE_TAG"
+        
+        # Check if file exists
+        if [ ! -f "${{ secrets.K8S_FILE_PATH }}" ]; then
+          echo "Error: File ${{ secrets.K8S_FILE_PATH }} not found in ${{ secrets.K8S_REPO }}"
+          ls -R
+          exit 1
+        fi
+
+        # Update the image tag in the deployment file
+        # This regex looks for 'image: <anything>' and replaces it with the new image tag
+        # It assumes the image field is for the web-ssh-backend container
+        sed -i "s|image:.*${{ github.repository }}.*|image: ${IMAGE_TAG}|g" ${{ secrets.K8S_FILE_PATH }}
+        
+        # If the above sed didn't match (maybe image name is different in yaml), try a broader match if needed, 
+        # but safer to be specific to avoid changing other containers (like sidecars)
+        
+    - name: Commit and push changes
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        
+        # Check if there are changes
+        if git diff --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        git add ${{ secrets.K8S_FILE_PATH }}
+        git commit -m "Update ${{ secrets.REGISTRY }}/${{ github.repository }} image to main-${{ github.sha }}"
+        git push
