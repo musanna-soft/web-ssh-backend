@@ -111,7 +111,7 @@ func generateStateOauthCookie(w http.ResponseWriter) string {
 		Value:    state,
 		Expires:  time.Now().Add(24 * time.Hour),
 		HttpOnly: true,
-		// Secure:   true, // Set to true in production with HTTPS
+		Secure:   strings.Split(os.Getenv("GOOGLE_REDIRECT_URL"), "//")[0] == "https",
 	}
 	http.SetCookie(w, &cookie)
 	return state
@@ -148,6 +148,10 @@ func generateJWT(user models.User) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
+type contextKey string
+
+const userIDKey contextKey = "user_id"
+
 // Middleware
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,8 +175,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			// Add user info to context
-			ctx := context.WithValue(r.Context(), "user_id", claims["user_id"])
+			ctx := context.WithValue(r.Context(), userIDKey, claims["user_id"])
 			next.ServeHTTP(w, r.WithContext(ctx))
 		} else {
 			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
