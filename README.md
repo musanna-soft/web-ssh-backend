@@ -2,6 +2,21 @@
 
 This is the backend component of the Web SSH application, written in Go (Golang). It handles WebSocket connections and manages SSH sessions.
 
+## Features
+
+- **Dual Keepalive Mechanism**: Prevents connection timeouts at both WebSocket and SSH levels
+  - **WebSocket Keepalive**:
+    - Server sends ping every 54 seconds
+    - 60-second timeout for pong responses
+    - Prevents WebSocket connection drops during inactive terminal sessions
+  - **SSH Keepalive**:
+    - Sends keepalive requests to SSH server every 30 seconds
+    - Prevents SSH server-side timeout
+    - Uses OpenSSH-compatible keepalive protocol
+- **SSH Session Management**: Secure SSH connections with support for password and key-based authentication
+- **Google OAuth Integration**: Secure user authentication
+- **End-to-End Encryption**: Server credentials are encrypted at rest
+
 ## 1. Configuration (.env)
 
 Before running the application, you need to configure the environment variables.

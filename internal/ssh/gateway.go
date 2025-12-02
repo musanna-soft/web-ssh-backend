@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"web-ssh-backend/internal/crypto"
 	"web-ssh-backend/internal/db"
@@ -40,7 +41,7 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	// For now, assuming we trust the token if it parses with our secret
 	// In real app, reuse the parsing logic from auth package
 	// ... (skipping detailed token re-verification code duplication for brevity, assuming valid if we get user_id)
-	
+
 	// 2. Get Server ID
 	serverIDStr := r.URL.Query().Get("server_id")
 	serverID, _ := strconv.Atoi(serverIDStr)
@@ -79,9 +80,10 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := &ssh.ClientConfig{
-		User: server.Username,
-		Auth: []ssh.AuthMethod{authMethod},
+		User:            server.Username,
+		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // In production, use known_hosts
+		Timeout:         30 * time.Second,
 	}
 
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", server.Host, server.Port), config)
@@ -90,6 +92,18 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
+
+	// Enable SSH keepalive to prevent server-side timeout
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -130,10 +144,47 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 9. Handle WS Messages
+	// 9. Setup WebSocket keepalive
+	const (
+		writeWait      = 10 * time.Second
+		pongWait       = 60 * time.Second
+		pingPeriod     = (pongWait * 9) / 10
+		maxMessageSize = 8192
+	)
+
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	// Start ping ticker
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	// Channel to signal when to stop
+	done := make(chan struct{})
+
+	// Goroutine to send periodic pings
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
+				if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// 10. Handle WS Messages
 	for {
 		_, msg, err := ws.ReadMessage()
 		if err != nil {
+			close(done)
 			break
 		}
 
@@ -149,6 +200,10 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 			session.WindowChange(wsMsg.Rows, wsMsg.Cols)
 		} else if wsMsg.Type == "data" {
 			stdin.Write([]byte(wsMsg.Content))
+		} else if wsMsg.Type == "ping" {
+			// Client sent a ping, respond with pong
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			ws.WriteJSON(WSMessage{Type: "pong"})
 		}
 	}
 }
