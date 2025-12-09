@@ -1,10 +1,12 @@
 package ssh
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -86,21 +88,46 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 		Timeout:         30 * time.Second,
 	}
 
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", server.Host, server.Port), config)
+	// Create TCP connection with keepalive enabled
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 15 * time.Second, // TCP keepalive every 15 seconds
+	}
+
+	addr := fmt.Sprintf("%s:%d", server.Host, server.Port)
+	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: Connection failed: %v\r\n", err)))
 		return
 	}
+	defer conn.Close()
+
+	// Perform SSH handshake over TCP connection
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: SSH handshake failed: %v\r\n", err)))
+		return
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
-	// Enable SSH keepalive to prevent server-side timeout
+	// Enable SSH keepalive to prevent server-side timeout with context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(15 * time.Second) // Reduced to 15s for more aggressive keepalive
 		defer ticker.Stop()
-		for range ticker.C {
-			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
-			if err != nil {
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case <-ticker.C:
+				_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+				if err != nil {
+					log.Printf("SSH keepalive failed: %v", err)
+					return
+				}
 			}
 		}
 	}()
@@ -136,7 +163,11 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 	// stderr, _ := session.StderrPipe() // Combine with stdout for simplicity in xterm
 
 	go func() {
-		io.Copy(&WSWriter{ws}, stdout)
+		writer := &WSWriter{
+			ws:        ws,
+			writeWait: 10 * time.Second,
+		}
+		io.Copy(writer, stdout)
 	}()
 
 	if err := session.Shell(); err != nil {
@@ -209,10 +240,17 @@ func HandleSSHWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 type WSWriter struct {
-	ws *websocket.Conn
+	ws        *websocket.Conn
+	writeWait time.Duration
 }
 
 func (w *WSWriter) Write(p []byte) (n int, err error) {
-	err = w.ws.WriteMessage(websocket.BinaryMessage, p) // Send raw binary to xterm
-	return len(p), err
+	// Set write deadline to prevent blocking indefinitely
+	w.ws.SetWriteDeadline(time.Now().Add(w.writeWait))
+	err = w.ws.WriteMessage(websocket.BinaryMessage, p)
+	if err != nil {
+		log.Printf("WebSocket write error: %v", err)
+		return 0, err
+	}
+	return len(p), nil
 }
