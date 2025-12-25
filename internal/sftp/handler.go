@@ -1,11 +1,16 @@
 package sftp
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log"
+	"mime"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"web-ssh-backend/internal/crypto"
 	"web-ssh-backend/internal/db"
@@ -59,12 +64,85 @@ func connectSFTP(serverID uint) (*ssh.Client, *sftp.Client, error) {
 		User:            server.Username,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second,
 	}
 
 	sshClient, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", server.Host, server.Port), config)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	sftpClient, err := sftp.NewClient(sshClient)
+	if err != nil {
+		sshClient.Close()
+		return nil, nil, err
+	}
+
+	return sshClient, sftpClient, nil
+}
+
+func connectSFTPWithKeepalive(ctx context.Context, serverID uint) (*ssh.Client, *sftp.Client, error) {
+	var server models.Server
+	if err := db.DB.First(&server, serverID).Error; err != nil {
+		return nil, nil, err
+	}
+
+	secret, err := crypto.Decrypt(server.EncryptedSecret)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	authMethod := ssh.Password(secret)
+	if server.AuthType == "key" {
+		signer, err := ssh.ParsePrivateKey([]byte(secret))
+		if err != nil {
+			return nil, nil, err
+		}
+		authMethod = ssh.PublicKeys(signer)
+	}
+
+	config := &ssh.ClientConfig{
+		User:            server.Username,
+		Auth:            []ssh.AuthMethod{authMethod},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second,
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 15 * time.Second,
+	}
+
+	addr := fmt.Sprintf("%s:%d", server.Host, server.Port)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	sshClient := ssh.NewClient(sshConn, chans, reqs)
+
+	// SSH keepalive (application-level) to survive server-side idle timeouts.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _, err := sshClient.SendRequest("keepalive@openssh.com", true, nil)
+				if err != nil {
+					log.Printf("SFTP SSH keepalive failed: %v", err)
+					return
+				}
+			}
+		}
+	}()
 
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
@@ -88,9 +166,46 @@ func HandleSFTPWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	sshClient, sftpClient, err := connectSFTP(uint(serverID))
+	// WebSocket keepalive (server-side pings) to prevent idle disconnects.
+	const (
+		writeWait      = 10 * time.Second
+		pongWait       = 60 * time.Second
+		pingPeriod     = (pongWait * 9) / 10
+		maxMessageSize = 8192
+	)
+
+	ws.SetReadLimit(maxMessageSize)
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	pingTicker := time.NewTicker(pingPeriod)
+	defer pingTicker.Stop()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-pingTicker.C:
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
+				if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	sshClient, sftpClient, err := connectSFTPWithKeepalive(ctx, uint(serverID))
 	if err != nil {
 		ws.WriteJSON(map[string]string{"error": err.Error()})
+		close(done)
 		return
 	}
 	defer sftpClient.Close()
@@ -99,10 +214,14 @@ func HandleSFTPWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		var msg SFTPMessage
 		if err := ws.ReadJSON(&msg); err != nil {
+			close(done)
 			break
 		}
 
 		switch msg.Action {
+		case "ping":
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = ws.WriteJSON(map[string]string{"action": "pong"})
 		case "ls":
 			path := msg.Path
 			if path == "" || path == "." {
@@ -133,13 +252,16 @@ func HandleSFTPWebSocket(w http.ResponseWriter, r *http.Request) {
 					Mode:  f.Mode().String(),
 				})
 			}
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			ws.WriteJSON(map[string]interface{}{"action": "ls", "path": path, "files": fileList})
 
 		case "mkdir":
 			err := sftpClient.Mkdir(msg.Path)
 			if err != nil {
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
 				ws.WriteJSON(map[string]string{"error": err.Error()})
 			} else {
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
 				ws.WriteJSON(map[string]string{"status": "ok", "action": "mkdir"})
 			}
 
@@ -151,8 +273,10 @@ func HandleSFTPWebSocket(w http.ResponseWriter, r *http.Request) {
 				err = sftpClient.RemoveDirectory(msg.Path)
 			}
 			if err != nil {
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
 				ws.WriteJSON(map[string]string{"error": err.Error()})
 			} else {
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
 				ws.WriteJSON(map[string]string{"status": "ok", "action": "rm"})
 			}
 		}
@@ -179,9 +303,42 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	var size int64
+	if info, err := file.Stat(); err == nil {
+		size = info.Size()
+		if size >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
+	}
+
+	contentType := mime.TypeByExtension(filepath.Ext(path))
+	if contentType == "" {
+		head := make([]byte, 512)
+		n, _ := file.Read(head)
+		// Reset offset so GET streams from start.
+		if _, err := file.Seek(0, 0); err != nil {
+			// Fallback: re-open if Seek isn't supported.
+			_ = file.Close()
+			file, err = sftpClient.Open(path)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			defer file.Close()
+		}
+		contentType = http.DetectContentType(head[:n])
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filepath.Base(path)))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	io.Copy(w, file)
+	w.Header().Set("Content-Type", contentType)
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	_, _ = io.Copy(w, file)
 }
 
 func HandleUpload(w http.ResponseWriter, r *http.Request) {

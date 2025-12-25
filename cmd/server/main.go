@@ -58,7 +58,6 @@ func main() {
 	// SFTP API Routes (Protected)
 	apiRouter.HandleFunc("/sftp/download", sftp.HandleDownload).Methods("GET")
 	apiRouter.HandleFunc("/sftp/upload", sftp.HandleUpload).Methods("POST")
-	apiRouter.HandleFunc("/sftp/content", sftp.HandleGetFileContent).Methods("GET")
 	apiRouter.HandleFunc("/sftp/content", sftp.HandleSaveFileContent).Methods("POST")
 	apiRouter.HandleFunc("/sftp/zip", sftp.HandleDownloadZip).Methods("GET")
 	apiRouter.HandleFunc("/sftp/move", sftp.HandleMoveFile).Methods("POST")
