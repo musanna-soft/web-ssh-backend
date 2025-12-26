@@ -1,6 +1,6 @@
-# Web SSH Backend
+# Remofy Backend
 
-This is the backend component of the Web SSH application, written in Go (Golang). It handles WebSocket connections and manages SSH sessions.
+This is the backend component of the Remofy application, written in Go (Golang). It handles WebSocket connections and manages SSH sessions.
 
 ## Features
 
