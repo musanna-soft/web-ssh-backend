@@ -7,6 +7,8 @@
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const API_BASE = "/api/mfa/bot";
+const REQUESTED_ACTION =
+  new URLSearchParams(window.location.search).get("action") || "";
 let state = {
   enrolled: false,
   hasDevices: false,
@@ -50,6 +52,18 @@ async function bootstrap() {
   const status = await fetchJSON(`${API_BASE}/status`, { method: "POST" });
   state.enrolled = !!status.enrolled;
   state.hasDevices = (status.devices || 0) > 0;
+
+  // Bot opened the Mini App via /bind: skip the unlock UI entirely and
+  // land on the registration ceremony. Requires an active session — if
+  // the user is locked we fall back to the unlock flow first, then bind
+  // after success (set webauthnFailed so unlockTotp shows bind-device).
+  if (REQUESTED_ACTION === "bind" && status.enrolled) {
+    if (status.active) {
+      showScreen("bind-device");
+      return;
+    }
+    state.webauthnFailed = true; // forces bind prompt after TOTP unlock
+  }
 
   if (!status.enrolled) {
     await startSetup();
