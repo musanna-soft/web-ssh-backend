@@ -31,6 +31,54 @@ const (
 	pinLockoutWindow = 5 * time.Minute
 )
 
+// ===== GET /api/mfa/pin/devices =====
+
+type pinDeviceEntry struct {
+	ID         uint      `json:"id"`
+	Label      string    `json:"label"`
+	TelegramID int64     `json:"telegram_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+// GetPinDevices lists all PIN-protected device bindings for the caller.
+// On the web surface every binding is shown (cross-account view); on the
+// bot surface the list is scoped to the current Telegram account so a
+// second account can't enumerate the first one's PINs.
+func GetPinDevices(w http.ResponseWriter, r *http.Request) {
+	uid, ok := mfaUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	surface := mfaSurface(r)
+	tgID := mfaTelegramID(r)
+
+	q := db.DB.Where("user_id = ?", uid)
+	if surface == auth.SurfaceBot {
+		q = q.Where("telegram_id = ?", tgID)
+	}
+
+	var rows []models.DevicePin
+	if err := q.Order("created_at DESC").Find(&rows).Error; err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]pinDeviceEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, pinDeviceEntry{
+			ID:         r.ID,
+			Label:      r.Label,
+			TelegramID: r.TelegramID,
+			CreatedAt:  r.CreatedAt,
+			LastUsedAt: r.LastUsedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"devices": out})
+}
+
 // ===== /api/mfa/pin/register =====
 
 type pinRegisterInput struct {

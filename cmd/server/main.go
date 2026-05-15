@@ -138,5 +138,6 @@ func registerMFARoutes(r *mux.Router, _ string) {
 	r.HandleFunc("/webauthn/login/finish", api.PostWebAuthnLoginFinish).Methods("POST")
 	r.HandleFunc("/pin/register", api.PostPinRegister).Methods("POST")
 	r.HandleFunc("/pin/unlock", api.PostPinUnlock).Methods("POST")
+	r.HandleFunc("/pin/devices", api.GetPinDevices).Methods("GET")
 	r.HandleFunc("/pin/devices/{id}", api.DeletePinDevice).Methods("DELETE")
 }
