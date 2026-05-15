@@ -3,11 +3,13 @@ package db
 import (
 	"log"
 	"os"
+	"time"
 
 	"web-ssh-backend/internal/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
@@ -20,7 +22,19 @@ func Init() {
 		log.Fatalf("DB_PATH environment variable is not set")
 	}
 
-	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// Quieter logger — MFA code paths intentionally use First() to probe
+	// for rows, so "record not found" is the expected non-error outcome.
+	gormLogger := logger.New(
+		log.New(os.Stdout, "", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
+	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
