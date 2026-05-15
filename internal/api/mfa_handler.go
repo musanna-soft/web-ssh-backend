@@ -50,6 +50,14 @@ func mfaSurface(r *http.Request) string {
 	return auth.SurfaceWeb
 }
 
+// mfaTelegramID returns the Telegram user id stored in the bot-surface
+// session cookie, or 0 for the web surface. Used to scope DeviceSession
+// rows per-Telegram-account so multi-account Telegram clients don't
+// silently inherit each other's unlocks.
+func mfaTelegramID(r *http.Request) int64 {
+	return auth.TelegramIDFromContext(r)
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -76,6 +84,7 @@ func GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
+	tgID := mfaTelegramID(r)
 
 	var enrolment models.MFAEnrollment
 	enrolled := false
@@ -86,9 +95,13 @@ func GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 	var devCount int64
 	db.DB.Model(&models.WebAuthnCredential{}).Where("user_id = ?", uid).Count(&devCount)
 
+	sessionQuery := db.DB.Model(&models.DeviceSession{}).
+		Where("user_id = ? AND surface = ? AND expires_at > ?", uid, surface, time.Now())
+	if surface == auth.SurfaceBot {
+		sessionQuery = sessionQuery.Where("telegram_id = ?", tgID)
+	}
 	var sessionCount int64
-	db.DB.Model(&models.DeviceSession{}).
-		Where("user_id = ? AND surface = ? AND expires_at > ?", uid, surface, time.Now()).
+	sessionQuery.
 		Count(&sessionCount)
 
 	var recoveryRemaining int64
@@ -252,7 +265,7 @@ func PostTOTPVerify(w http.ResponseWriter, r *http.Request) {
 		resp.Enrolled = true
 	}
 
-	if err := writeSession(uid, surface, "totp"); err != nil {
+	if err := writeSession(uid, surface, mfaTelegramID(r), "totp"); err != nil {
 		http.Error(w, "session write", http.StatusInternalServerError)
 		return
 	}
@@ -313,7 +326,7 @@ func PostRecoveryUse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := writeSession(uid, surface, "recovery"); err != nil {
+	if err := writeSession(uid, surface, mfaTelegramID(r), "recovery"); err != nil {
 		http.Error(w, "session write", http.StatusInternalServerError)
 		return
 	}
@@ -342,8 +355,9 @@ func PostRecoveryRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
+	tgID := mfaTelegramID(r)
 
-	if !auth.IsActive(uid, surface) {
+	if !auth.IsActive(uid, surface, tgID) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "mfa_required"})
 		return
 	}
@@ -375,13 +389,19 @@ func PostMFALock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
+	tgID := mfaTelegramID(r)
 
-	if err := db.DB.Where("user_id = ? AND surface = ?", uid, surface).
-		Delete(&models.DeviceSession{}).Error; err != nil {
+	// On the bot surface scope the delete to the specific Telegram account
+	// so locking from one account doesn't kick the others.
+	q := db.DB.Where("user_id = ? AND surface = ?", uid, surface)
+	if surface == auth.SurfaceBot {
+		q = q.Where("telegram_id = ?", tgID)
+	}
+	if err := q.Delete(&models.DeviceSession{}).Error; err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
-	auth.InvalidateActiveCache(uid, surface)
+	auth.InvalidateActiveCache(uid, surface, tgID)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -402,7 +422,7 @@ func PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
-	if !auth.IsActive(uid, surface) {
+	if !auth.IsActive(uid, surface, mfaTelegramID(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "mfa_required"})
 		return
 	}
@@ -435,8 +455,12 @@ func PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "db commit", http.StatusInternalServerError)
 		return
 	}
-	auth.InvalidateActiveCache(uid, auth.SurfaceWeb)
-	auth.InvalidateActiveCache(uid, auth.SurfaceBot)
+	// Reset wipes every DeviceSession row across surfaces and Telegram
+	// accounts, so blow the cache for the calling identity. Other rows
+	// that may have lived in the cache for the same user (different
+	// Telegram accounts) will expire on the 5s TTL.
+	auth.InvalidateActiveCache(uid, auth.SurfaceWeb, 0)
+	auth.InvalidateActiveCache(uid, auth.SurfaceBot, mfaTelegramID(r))
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -488,7 +512,7 @@ func DeleteMFADevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
-	if !auth.IsActive(uid, surface) {
+	if !auth.IsActive(uid, surface, mfaTelegramID(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "mfa_required"})
 		return
 	}
@@ -538,21 +562,26 @@ func mintRecoveryCodes(userID uint) ([]string, error) {
 	return codes, nil
 }
 
-func writeSession(userID uint, surface, deviceLabel string) error {
-	// Single active session per (user, surface) — replace prior on each unlock.
-	if err := db.DB.Where("user_id = ? AND surface = ?", userID, surface).
-		Delete(&models.DeviceSession{}).Error; err != nil {
+func writeSession(userID uint, surface string, telegramID int64, deviceLabel string) error {
+	// Single active session per (user, surface, telegram_id). For the web
+	// surface telegramID is always 0 — there is no per-account split.
+	q := db.DB.Where("user_id = ? AND surface = ?", userID, surface)
+	if surface == auth.SurfaceBot {
+		q = q.Where("telegram_id = ?", telegramID)
+	}
+	if err := q.Delete(&models.DeviceSession{}).Error; err != nil {
 		return err
 	}
 	row := models.DeviceSession{
 		UserID:      userID,
 		Surface:     surface,
+		TelegramID:  telegramID,
 		ExpiresAt:   time.Now().Add(auth.SessionTTL()),
 		DeviceLabel: deviceLabel,
 	}
 	if err := db.DB.Create(&row).Error; err != nil {
 		return err
 	}
-	auth.InvalidateActiveCache(userID, surface)
+	auth.InvalidateActiveCache(userID, surface, telegramID)
 	return nil
 }

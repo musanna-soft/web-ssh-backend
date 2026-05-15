@@ -56,27 +56,28 @@ func loadCookieKey() ([]byte, error) {
 	return cookieKey, cookieKeyErr
 }
 
-// signCookieValue produces "uid.surface.exp.sig" where sig is a hex-encoded
-// HMAC-SHA256 over the first three fields. Lightweight stand-in for a JWT.
-func signCookieValue(userID uint, surface string, exp time.Time) (string, error) {
+// signCookieValue produces "uid.surface.tg.exp.sig" where sig is a hex-encoded
+// HMAC-SHA256 over the first four fields. tg is the Telegram user id (or 0
+// for the web surface). Lightweight stand-in for a JWT.
+func signCookieValue(userID uint, surface string, telegramID int64, exp time.Time) (string, error) {
 	key, err := loadCookieKey()
 	if err != nil {
 		return "", err
 	}
-	payload := fmt.Sprintf("%d.%s.%d", userID, surface, exp.Unix())
+	payload := fmt.Sprintf("%d.%s.%d.%d", userID, surface, telegramID, exp.Unix())
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return payload + "." + sig, nil
 }
 
-func verifyCookieValue(value string) (userID uint, surface string, exp time.Time, err error) {
+func verifyCookieValue(value string) (userID uint, surface string, telegramID int64, exp time.Time, err error) {
 	parts := strings.Split(value, ".")
-	if len(parts) != 4 {
+	if len(parts) != 5 {
 		err = errors.New("malformed cookie")
 		return
 	}
-	payload := parts[0] + "." + parts[1] + "." + parts[2]
+	payload := parts[0] + "." + parts[1] + "." + parts[2] + "." + parts[3]
 	key, kerr := loadCookieKey()
 	if kerr != nil {
 		err = kerr
@@ -85,7 +86,7 @@ func verifyCookieValue(value string) (userID uint, surface string, exp time.Time
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(payload))
 	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(parts[3])) {
+	if !hmac.Equal([]byte(expected), []byte(parts[4])) {
 		err = errors.New("cookie signature mismatch")
 		return
 	}
@@ -94,7 +95,12 @@ func verifyCookieValue(value string) (userID uint, surface string, exp time.Time
 		err = errors.New("bad uid")
 		return
 	}
-	expTs, perr := strconv.ParseInt(parts[2], 10, 64)
+	tg64, perr := strconv.ParseInt(parts[2], 10, 64)
+	if perr != nil {
+		err = errors.New("bad telegram_id")
+		return
+	}
+	expTs, perr := strconv.ParseInt(parts[3], 10, 64)
 	if perr != nil {
 		err = errors.New("bad exp")
 		return
@@ -106,12 +112,13 @@ func verifyCookieValue(value string) (userID uint, surface string, exp time.Time
 	}
 	userID = uint(uid64)
 	surface = parts[1]
+	telegramID = tg64
 	return
 }
 
-func setMFASessionCookie(w http.ResponseWriter, userID uint, surface string) error {
+func setMFASessionCookie(w http.ResponseWriter, userID uint, surface string, telegramID int64) error {
 	exp := time.Now().Add(mfaCookieTTL)
-	value, err := signCookieValue(userID, surface, exp)
+	value, err := signCookieValue(userID, surface, telegramID, exp)
 	if err != nil {
 		return err
 	}
@@ -141,18 +148,18 @@ func clearMFASessionCookie(w http.ResponseWriter) {
 	})
 }
 
-func readMFASessionCookie(r *http.Request) (userID uint, surface string, err error) {
+func readMFASessionCookie(r *http.Request) (userID uint, surface string, telegramID int64, err error) {
 	c, cerr := r.Cookie(mfaCookieName)
 	if cerr != nil {
 		err = cerr
 		return
 	}
-	uid, sur, _, verr := verifyCookieValue(c.Value)
+	uid, sur, tg, _, verr := verifyCookieValue(c.Value)
 	if verr != nil {
 		err = verr
 		return
 	}
-	return uid, sur, nil
+	return uid, sur, tg, nil
 }
 
 // cookieSecure mirrors the heuristic used elsewhere in auth.go — Secure

@@ -62,7 +62,7 @@ func VerifyTelegramAndMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := setMFASessionCookie(w, link.UserID, SurfaceBot); err != nil {
+	if err := setMFASessionCookie(w, link.UserID, SurfaceBot, tgUser.ID); err != nil {
 		http.Error(w, "failed to mint session", http.StatusInternalServerError)
 		return
 	}
@@ -83,7 +83,7 @@ func VerifyTelegramAndMint(w http.ResponseWriter, r *http.Request) {
 // again with a fresh initData".
 func RequireMFASessionCookie(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid, surface, err := readMFASessionCookie(r)
+		uid, surface, tg, err := readMFASessionCookie(r)
 		if err != nil {
 			http.Error(w, "missing or invalid mfa_session: "+err.Error(), http.StatusUnauthorized)
 			return
@@ -91,8 +91,18 @@ func RequireMFASessionCookie(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, "user_id", uid)
 		ctx = context.WithValue(ctx, "mfa_surface", surface)
+		ctx = context.WithValue(ctx, "mfa_telegram_id", tg)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// TelegramIDFromContext extracts the Telegram user id stored in the
+// mfa_session cookie. Returns 0 for non-bot surfaces.
+func TelegramIDFromContext(r *http.Request) int64 {
+	if v, ok := r.Context().Value("mfa_telegram_id").(int64); ok {
+		return v
+	}
+	return 0
 }
 
 // surfaceFromContext returns "web" or "bot" based on which middleware set up

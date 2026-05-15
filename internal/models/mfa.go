@@ -31,13 +31,22 @@ type WebAuthnCredential struct {
 }
 
 // DeviceSession — a 30-minute (configurable) active window granted after a
-// successful WebAuthn assertion (or TOTP unlock during slice 1). Separate
-// per Surface: a web unlock does not implicitly unlock the Telegram bot.
+// successful WebAuthn assertion (or TOTP unlock during slice 1).
+//
+// Scope keys:
+//   - UserID + Surface = "web": one session per web-ssh user; the
+//     stateless browser frontend doesn't have a more granular identity.
+//   - UserID + Surface = "bot" + TelegramID: one session per Telegram
+//     account. When a user has multiple Telegram accounts linked to the
+//     same web-ssh user (e.g. multi-account in one Telegram app), each
+//     must unlock independently — otherwise unlocking on account A
+//     would silently grant bot access from account B.
 type DeviceSession struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	UserID      uint      `gorm:"index;not null" json:"user_id"`
 	User        User      `gorm:"foreignKey:UserID" json:"-"`
 	Surface     string    `gorm:"not null;size:16;index" json:"surface"` // "web" or "bot"
+	TelegramID  int64     `gorm:"index;not null;default:0" json:"telegram_id"`
 	ExpiresAt   time.Time `gorm:"index;not null" json:"expires_at"`
 	DeviceLabel string    `json:"device_label"`
 	CreatedAt   time.Time `json:"created_at"`

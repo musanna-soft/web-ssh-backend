@@ -78,8 +78,34 @@ var (
 
 const activeCacheTTL = 5 * time.Second
 
-func activeCacheKey(userID uint, surface string) string {
-	return surface + ":" + uintToStr(userID)
+func activeCacheKey(userID uint, surface string, telegramID int64) string {
+	if telegramID == 0 {
+		return surface + ":" + uintToStr(userID)
+	}
+	return surface + ":" + uintToStr(userID) + ":" + int64ToStr(telegramID)
+}
+
+func int64ToStr(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
 
 func uintToStr(n uint) string {
@@ -96,10 +122,16 @@ func uintToStr(n uint) string {
 	return string(buf[i:])
 }
 
-// IsActive reports whether the given user has an unexpired DeviceSession for
-// the given surface ("web" or "bot"). Cheap-cached for 5 seconds.
-func IsActive(userID uint, surface string) bool {
-	key := activeCacheKey(userID, surface)
+// IsActive reports whether the given identity has an unexpired DeviceSession.
+//
+// telegramID:
+//   - 0 for the web surface (no per-Telegram-account split there).
+//   - The Telegram user id for the bot surface, so two Telegram accounts
+//     linked to the same web-ssh user must each unlock independently.
+//
+// Cached for 5 seconds.
+func IsActive(userID uint, surface string, telegramID int64) bool {
+	key := activeCacheKey(userID, surface, telegramID)
 
 	activeCacheMu.Lock()
 	if e, ok := activeCache[key]; ok && time.Since(e.cachedAt) < activeCacheTTL {
@@ -108,11 +140,13 @@ func IsActive(userID uint, surface string) bool {
 	}
 	activeCacheMu.Unlock()
 
+	q := db.DB.Model(&models.DeviceSession{}).
+		Where("user_id = ? AND surface = ? AND expires_at > ?", userID, surface, time.Now())
+	if surface == SurfaceBot {
+		q = q.Where("telegram_id = ?", telegramID)
+	}
 	var count int64
-	if err := db.DB.Model(&models.DeviceSession{}).
-		Where("user_id = ? AND surface = ? AND expires_at > ?", userID, surface, time.Now()).
-		Count(&count).Error; err != nil {
-		// On DB error, fail closed only if MFA is required.
+	if err := q.Count(&count).Error; err != nil {
 		return false
 	}
 	active := count > 0
@@ -124,10 +158,10 @@ func IsActive(userID uint, surface string) bool {
 	return active
 }
 
-// InvalidateActiveCache clears the cache for a (userID, surface) tuple. Call
-// after writing a new DeviceSession or running /lock.
-func InvalidateActiveCache(userID uint, surface string) {
-	key := activeCacheKey(userID, surface)
+// InvalidateActiveCache clears the cache for one identity. Call after
+// writing a new DeviceSession or running /lock.
+func InvalidateActiveCache(userID uint, surface string, telegramID int64) {
+	key := activeCacheKey(userID, surface, telegramID)
 	activeCacheMu.Lock()
 	delete(activeCache, key)
 	activeCacheMu.Unlock()
@@ -173,7 +207,7 @@ func MFAGate(next http.Handler) http.Handler {
 			return
 		}
 
-		if IsActive(uid, SurfaceWeb) {
+		if IsActive(uid, SurfaceWeb, 0) {
 			next.ServeHTTP(w, r)
 			return
 		}

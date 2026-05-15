@@ -21,7 +21,7 @@ func PostWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface := mfaSurface(r)
-	if !auth.IsActive(uid, surface) {
+	if !auth.IsActive(uid, surface, mfaTelegramID(r)) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "mfa_required"})
 		return
 	}
@@ -122,7 +122,7 @@ func PostWebAuthnLoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := writeSession(uid, surface, "webauthn:"+row.Label); err != nil {
+	if err := writeSession(uid, surface, mfaTelegramID(r), "webauthn:"+row.Label); err != nil {
 		http.Error(w, "session write", http.StatusInternalServerError)
 		return
 	}
