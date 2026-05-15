@@ -52,6 +52,29 @@ type DeviceSession struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// DevicePin — a 4-6 digit local passcode bound to a single Telegram client
+// install. Modelled on Telegram Wallet's PIN: server stores only the
+// bcrypt hash, the Mini App holds a random DeviceID in localStorage that
+// proves which row to look up on unlock. Bound to (UserID, TelegramID)
+// so a second Telegram account in the same client can't reuse the PIN.
+//
+// Rate-limit: FailedAttempts is bumped on each wrong submission; once it
+// hits 5 the LockedUntil window blocks further attempts for 5 minutes.
+// A successful unlock resets the counter.
+type DevicePin struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	UserID         uint       `gorm:"index;not null" json:"user_id"`
+	User           User       `gorm:"foreignKey:UserID" json:"-"`
+	TelegramID     int64      `gorm:"index;not null" json:"telegram_id"`
+	DeviceID       string     `gorm:"uniqueIndex;not null;size:64" json:"-"`
+	PinHash        string     `gorm:"not null" json:"-"`
+	Label          string     `json:"label"`
+	FailedAttempts int        `gorm:"not null;default:0" json:"-"`
+	LockedUntil    *time.Time `json:"-"`
+	CreatedAt      time.Time  `json:"created_at"`
+	LastUsedAt     time.Time  `json:"last_used_at"`
+}
+
 // RecoveryCode — one-time-use backup code (10 generated at enrollment).
 // Shown to the user exactly once in plaintext; only the bcrypt hash is
 // stored. When the user later submits a code at /api/mfa/recovery/use, the

@@ -9,10 +9,15 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const API_BASE = "/api/mfa/bot";
 const REQUESTED_ACTION =
   new URLSearchParams(window.location.search).get("action") || "";
+// localStorage key for the per-device PIN binding. The DeviceID is a
+// random string the server generated when this device first set up a
+// PIN; clearing it dissociates this Telegram install from any PIN row.
+const PIN_DEVICE_KEY = "mfa_device_id";
 let state = {
   enrolled: false,
   hasDevices: false,
   webauthnFailed: false, // set when auto-unlock can't find a credential on THIS device
+  pinDevices: 0,
   recoveryCodes: [],
 };
 
@@ -52,6 +57,7 @@ async function bootstrap() {
   const status = await fetchJSON(`${API_BASE}/status`, { method: "POST" });
   state.enrolled = !!status.enrolled;
   state.hasDevices = (status.devices || 0) > 0;
+  state.pinDevices = status.pin_devices || 0;
 
   // Bot opened the Mini App via /bind: skip the unlock UI entirely and
   // land on the registration ceremony. Requires an active session — if
@@ -67,15 +73,37 @@ async function bootstrap() {
 
   if (!status.enrolled) {
     await startSetup();
-  } else if (status.active) {
-    showScreen("done");
-  } else {
-    showUnlockScreen();
+    return;
   }
+  if (status.active) {
+    showScreen("done");
+    return;
+  }
+
+  // If this Telegram install has a PIN bound to it (DeviceID in
+  // localStorage AND a matching row server-side), prefer the PIN unlock
+  // path — it's the smoothest mobile UX and what the user explicitly
+  // opted into. Fall back to TOTP/WebAuthn if the binding is stale.
+  if (localStorage.getItem(PIN_DEVICE_KEY) && state.pinDevices > 0) {
+    showPinUnlockScreen();
+    return;
+  }
+
+  showUnlockScreen();
 }
 
 function showUnlockScreen() {
   showScreen("unlock");
+  // If a PIN binding exists for this Telegram install, expose the
+  // "PIN bilan kirish" button so the user can flip to PIN unlock without
+  // going through TOTP. Hidden when no binding is registered here.
+  const pinBtn = document.getElementById("switch-to-pin-btn");
+  if (pinBtn) {
+    pinBtn.style.display =
+      localStorage.getItem(PIN_DEVICE_KEY) && state.pinDevices > 0
+        ? ""
+        : "none";
+  }
   // If the browser supports WebAuthn AND the user has at least one registered
   // credential (somewhere — maybe another device), try the biometric path.
   // If it fails (this device has no matching passkey) fall back to TOTP.
@@ -183,13 +211,16 @@ async function verifyEnroll() {
 }
 
 function afterRecoveryAck() {
-  // Offer to bind the current device biometrically. Falls back to "done"
-  // if WebAuthn isn't available (e.g. older mobile Telegram WebViews).
+  // Offer biometric first (strongest factor). If WebAuthn isn't available
+  // in this WebView, fall straight to the PIN setup so the user still
+  // has a faster-than-TOTP unlock path next time.
   if (
     typeof window.PublicKeyCredential !== "undefined" &&
     typeof navigator.credentials !== "undefined"
   ) {
     showScreen("bind-device");
+  } else if (!localStorage.getItem(PIN_DEVICE_KEY)) {
+    showPinSetupScreen();
   } else {
     showScreen("done");
   }
@@ -224,7 +255,13 @@ function downloadRecovery() {
 }
 
 function finishEnroll() {
-  showScreen("done");
+  // User dismissed the biometric prompt — offer PIN setup as the
+  // mobile-friendly fallback so they're not stuck typing TOTP forever.
+  if (!localStorage.getItem(PIN_DEVICE_KEY)) {
+    showPinSetupScreen();
+  } else {
+    showScreen("done");
+  }
 }
 
 async function unlockTotp() {
@@ -242,17 +279,20 @@ async function unlockTotp() {
       method: "POST",
       body: JSON.stringify({ code }),
     });
-    // Offer to bind a passkey on THIS device after every TOTP unlock,
-    // as long as the platform supports WebAuthn. We can't reliably tell
-    // whether this specific device already has a credential (passkeys
-    // are per-device, not per-user) — if the user used TOTP, it's a
-    // safe bet biometric on this device would help. The bind screen has
-    // a "Keyingi safar" button for users who don't want to bind.
+    // Post-unlock UX, in priority order:
+    //   1. Offer to register a passkey for this device when WebAuthn is
+    //      supported and no credential lives here yet.
+    //   2. Otherwise offer to set a local PIN — works on every mobile
+    //      Telegram WebView and matches the wallet-style flow users know.
+    //   3. Otherwise just show "done".
     const supportsWA =
       typeof window.PublicKeyCredential !== "undefined" &&
       typeof navigator.credentials !== "undefined";
+    const hasPinHere = !!localStorage.getItem(PIN_DEVICE_KEY);
     if (supportsWA) {
       showScreen("bind-device");
+    } else if (!hasPinHere) {
+      showPinSetupScreen();
     } else {
       showScreen("done");
     }
@@ -285,6 +325,121 @@ async function unlockRecovery() {
   } catch (e) {
     errEl.textContent = e.message || "Noto'g'ri kod";
   }
+}
+
+// ===== PIN =====
+
+function showPinUnlockScreen() {
+  showScreen("pin-unlock");
+  setTimeout(() => document.getElementById("pin-input").focus(), 120);
+}
+
+async function unlockPin() {
+  const btn = document.getElementById("pin-unlock-btn");
+  const input = document.getElementById("pin-input");
+  const errEl = document.getElementById("pin-error");
+  errEl.textContent = "";
+  const pin = (input.value || "").trim();
+  if (!/^\d{4,8}$/.test(pin)) {
+    errEl.textContent = "PIN 4-8 raqamdan iborat bo'lishi kerak";
+    return;
+  }
+  const deviceID = localStorage.getItem(PIN_DEVICE_KEY);
+  if (!deviceID) {
+    // localStorage cleared between page loads — drop to TOTP and offer
+    // PIN setup again after unlock.
+    switchToTotpFromPin();
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${API_BASE}/pin/unlock`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: deviceID, pin }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 429 && data.error === "locked") {
+      errEl.textContent =
+        "Juda ko'p urinish. " +
+        (data.retry_seconds || 300) +
+        " soniyadan keyin qayta urinib ko'ring.";
+      return;
+    }
+    if (!resp.ok) {
+      if (data.error === "unknown_device") {
+        // The server doesn't know this DeviceID — local storage is out of
+        // sync with reality. Forget it and switch to TOTP.
+        localStorage.removeItem(PIN_DEVICE_KEY);
+        switchToTotpFromPin();
+        return;
+      }
+      errEl.textContent = "Noto'g'ri PIN";
+      input.value = "";
+      input.focus();
+      return;
+    }
+    showScreen("done");
+  } catch (e) {
+    errEl.textContent = e.message || "Xatolik";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function switchToTotpFromPin() {
+  document.getElementById("unlock-help").textContent =
+    "Authenticator ilovasidan 6-xonali kodni kiriting.";
+  showScreen("unlock");
+  document.getElementById("unlock-webauthn").classList.add("hidden");
+  document.getElementById("unlock-totp").classList.remove("hidden");
+  setTimeout(() => document.getElementById("unlock-code").focus(), 120);
+}
+
+function forgetPinDevice() {
+  localStorage.removeItem(PIN_DEVICE_KEY);
+  switchToTotpFromPin();
+}
+
+function showPinSetupScreen() {
+  showScreen("pin-setup");
+  setTimeout(() => document.getElementById("pin-new").focus(), 120);
+}
+
+async function savePin() {
+  const btn = document.getElementById("pin-save-btn");
+  const errEl = document.getElementById("pin-setup-error");
+  const a = document.getElementById("pin-new").value.trim();
+  const b = document.getElementById("pin-confirm").value.trim();
+  errEl.textContent = "";
+  if (!/^\d{4,8}$/.test(a)) {
+    errEl.textContent = "PIN 4-8 raqamdan iborat bo'lishi kerak";
+    return;
+  }
+  if (a !== b) {
+    errEl.textContent = "PIN'lar bir xil emas";
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const data = await fetchJSON(`${API_BASE}/pin/register`, {
+      method: "POST",
+      body: JSON.stringify({ pin: a, label: guessDeviceLabel() }),
+    });
+    if (data.device_id) {
+      localStorage.setItem(PIN_DEVICE_KEY, data.device_id);
+    }
+    showScreen("done");
+  } catch (e) {
+    errEl.textContent = e.message || "Saqlanmadi";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function skipPinSetup() {
+  showScreen("done");
 }
 
 // ===== WebAuthn =====

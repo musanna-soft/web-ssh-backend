@@ -51,6 +51,7 @@ func Init() {
 		&models.WebAuthnCredential{},
 		&models.DeviceSession{},
 		&models.RecoveryCode{},
+		&models.DevicePin{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)

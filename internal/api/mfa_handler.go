@@ -95,6 +95,15 @@ func GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 	var devCount int64
 	db.DB.Model(&models.WebAuthnCredential{}).Where("user_id = ?", uid).Count(&devCount)
 
+	// PIN devices are scoped per Telegram account — only count the ones
+	// belonging to the current caller's tgID.
+	var pinCount int64
+	if surface == auth.SurfaceBot && tgID != 0 {
+		db.DB.Model(&models.DevicePin{}).
+			Where("user_id = ? AND telegram_id = ?", uid, tgID).
+			Count(&pinCount)
+	}
+
 	sessionQuery := db.DB.Model(&models.DeviceSession{}).
 		Where("user_id = ? AND surface = ? AND expires_at > ?", uid, surface, time.Now())
 	if surface == auth.SurfaceBot {
@@ -112,6 +121,7 @@ func GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enrolled":           enrolled,
 		"devices":            devCount,
+		"pin_devices":        pinCount,
 		"active":             sessionCount > 0,
 		"surface":            surface,
 		"recovery_remaining": recoveryRemaining,
@@ -447,6 +457,11 @@ func PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tx.Where("user_id = ?", uid).Delete(&models.MFAEnrollment{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Where("user_id = ?", uid).Delete(&models.DevicePin{}).Error; err != nil {
 		tx.Rollback()
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
