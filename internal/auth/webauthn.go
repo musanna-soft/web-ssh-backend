@@ -39,25 +39,64 @@ type pendingCeremony struct {
 	createdAt time.Time
 }
 
-// RP returns the lazily-built WebAuthn Relying Party, derived from
-// PUBLIC_BASE_URL. The RP ID is the hostname (no scheme, no port),
-// and the RP Origin is the full origin. Both ends MUST agree.
+// RP returns the lazily-built WebAuthn Relying Party.
+//
+// Resolution order:
+//   - WEBAUTHN_RP_ID (explicit) — should be the registrable suffix shared by
+//     every origin that will call WebAuthn (e.g. "remofy.musanna.uz" or
+//     "musanna.uz"). The browser refuses if RP ID is not a registrable
+//     suffix of the calling page's host.
+//   - falls back to PUBLIC_BASE_URL's host.
+//
+//   - WEBAUTHN_ORIGINS (comma-separated) — every origin the frontend and
+//     Mini App may call WebAuthn from. Required when the web frontend and
+//     Mini App live on different subdomains (the production layout here).
+//   - falls back to PUBLIC_BASE_URL alone; FRONTEND_URL is auto-appended
+//     when present to cover the obvious case without manual config.
 func RP() (*webauthn.WebAuthn, error) {
 	rpOnce.Do(func() {
-		rawURL := strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/")
-		if rawURL == "" {
+		publicURL := strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/")
+		if publicURL == "" {
 			rpErr = errors.New("PUBLIC_BASE_URL is not set")
 			return
 		}
-		u, err := url.Parse(rawURL)
+		publicU, err := url.Parse(publicURL)
 		if err != nil {
 			rpErr = fmt.Errorf("PUBLIC_BASE_URL: %w", err)
 			return
 		}
+
+		rpID := strings.TrimSpace(os.Getenv("WEBAUTHN_RP_ID"))
+		if rpID == "" {
+			rpID = publicU.Hostname()
+		}
+
+		var origins []string
+		if raw := strings.TrimSpace(os.Getenv("WEBAUTHN_ORIGINS")); raw != "" {
+			for _, o := range strings.Split(raw, ",") {
+				if o = strings.TrimSpace(strings.TrimRight(o, "/")); o != "" {
+					origins = append(origins, o)
+				}
+			}
+		}
+		if len(origins) == 0 {
+			origins = []string{publicURL}
+			if fe := strings.TrimRight(strings.TrimSpace(os.Getenv("FRONTEND_URL")), "/"); fe != "" {
+				// FRONTEND_URL may itself be comma-separated for multi-domain
+				// CORS; iterate and add each.
+				for _, o := range strings.Split(fe, ",") {
+					o = strings.TrimSpace(strings.TrimRight(o, "/"))
+					if o != "" && o != publicURL {
+						origins = append(origins, o)
+					}
+				}
+			}
+		}
+
 		cfg := &webauthn.Config{
-			RPID:          u.Hostname(),
+			RPID:          rpID,
 			RPDisplayName: "Remofy",
-			RPOrigins:     []string{rawURL},
+			RPOrigins:     origins,
 		}
 		rp, rpErr = webauthn.New(cfg)
 	})
