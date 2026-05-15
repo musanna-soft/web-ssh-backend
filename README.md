@@ -42,6 +42,7 @@ Before running the application, you need to configure the environment variables.
     -   `TELEGRAM_BOT_TOKEN`: required for the bot Mini App to verify `initData`
     -   `MFA_GRACE_UNTIL` (optional, RFC3339): grace window for legacy users
 
+
 ## MFA setup
 
 Once `MFA_REQUIRED=true` is set and the server is restarted:
