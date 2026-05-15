@@ -72,6 +72,14 @@ function showUnlockScreen() {
     wa.classList.remove("hidden");
     totp.classList.add("hidden");
     help.textContent = "Biometrik bilan kirish — qurilmangiz unlock'i so'raladi.";
+    // Trigger the FaceID / Hello prompt immediately. On iOS WKWebView the
+    // browser may refuse without a user gesture; in that case the user
+    // still sees the button and can tap it explicitly.
+    setTimeout(() => {
+      unlockWebAuthn().catch(() => {
+        /* error is rendered inside the unlock screen */
+      });
+    }, 150);
   } else {
     wa.classList.add("hidden");
     totp.classList.remove("hidden");
