@@ -192,7 +192,18 @@ async function unlockTotp() {
       method: "POST",
       body: JSON.stringify({ code }),
     });
-    showScreen("done");
+    // If the user enrolled but never bound a passkey, this is the moment
+    // to offer one — they have a fresh DeviceSession that the registration
+    // endpoint requires, and they've just proven they own the TOTP secret.
+    if (
+      !state.hasDevices &&
+      typeof window.PublicKeyCredential !== "undefined" &&
+      typeof navigator.credentials !== "undefined"
+    ) {
+      showScreen("bind-device");
+    } else {
+      showScreen("done");
+    }
   } catch (e) {
     errEl.textContent = e.message || "Noto'g'ri kod";
   } finally {
