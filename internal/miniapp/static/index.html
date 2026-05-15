@@ -36,8 +36,10 @@
     text-align: center;
     user-select: all;
   }
-  input[type="text"], input[type="tel"] {
+  input[type="text"], input[type="tel"], input[type="password"] {
     width: 100%;
+    box-sizing: border-box;
+    display: block;
     background: var(--tg-theme-bg-color, #0f1419);
     color: inherit;
     border: 1px solid var(--tg-theme-section-separator-color, #2f3336);
@@ -138,22 +140,30 @@
 
   <div id="screen-pin-unlock" class="card hidden">
     <h2>PIN kiriting</h2>
-    <p class="sub">Qurilma PIN'i bilan kirish.</p>
-    <input type="password" id="pin-input" maxlength="8" inputmode="numeric" placeholder="••••" autocomplete="off" />
+    <p>Bu qurilmada saqlangan PIN bilan kirish.</p>
+    <input type="password" id="pin-input" maxlength="8" inputmode="numeric" placeholder="PIN" autocomplete="off" />
     <button id="pin-unlock-btn" onclick="unlockPin()">Kirish</button>
     <div id="pin-error" class="error"></div>
     <button class="secondary" onclick="switchToTotpFromPin()">Authenticator kod ishlatish</button>
-    <button class="secondary" onclick="forgetPinDevice()">PIN'ni ushbu qurilmadan o'chirish</button>
+    <button class="secondary" onclick="forgetPinDevice()">PIN'ni shu qurilmadan o'chirish</button>
   </div>
 
   <div id="screen-pin-setup" class="card hidden">
     <h2>PIN o'rnatish</h2>
-    <p class="sub">Bu qurilma uchun 4-8 raqamli PIN. Keyingi safar kod o'rniga PIN bilan kirasiz.</p>
+    <p>Bu qurilma uchun 4-8 raqamli PIN. Keyingi safar Authenticator kod o'rniga PIN bilan kirasiz.</p>
     <input type="password" id="pin-new" maxlength="8" inputmode="numeric" placeholder="Yangi PIN" autocomplete="new-password" />
-    <input type="password" id="pin-confirm" maxlength="8" inputmode="numeric" placeholder="Yana bir bor takrorlang" autocomplete="new-password" />
+    <input type="password" id="pin-confirm" maxlength="8" inputmode="numeric" placeholder="Takrorlang" autocomplete="new-password" />
     <button id="pin-save-btn" onclick="savePin()">Saqlash</button>
     <div id="pin-setup-error" class="error"></div>
     <button class="secondary" onclick="skipPinSetup()">Keyingi safar</button>
+  </div>
+
+  <div id="screen-pin-manage" class="card hidden">
+    <h2>PIN boshqaruvi</h2>
+    <p id="pin-manage-status">PIN ushbu qurilma uchun saqlangan.</p>
+    <button onclick="startPinChange()">PIN'ni o'zgartirish</button>
+    <button class="secondary" onclick="forgetPinDevice()">PIN'ni shu qurilmadan o'chirish</button>
+    <button class="secondary" onclick="closeApp()">Yopish</button>
   </div>
 
   <div id="screen-unlock" class="card hidden">

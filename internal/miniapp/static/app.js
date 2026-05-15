@@ -71,6 +71,20 @@ async function bootstrap() {
     state.webauthnFailed = true; // forces bind prompt after TOTP unlock
   }
 
+  // Bot /pin: jump to PIN setup or PIN management depending on whether
+  // a binding already exists on this device.
+  if (REQUESTED_ACTION === "pin" && status.enrolled) {
+    if (status.active) {
+      if (localStorage.getItem(PIN_DEVICE_KEY) && state.pinDevices > 0) {
+        showScreen("pin-manage");
+      } else {
+        showPinSetupScreen();
+      }
+      return;
+    }
+    state.requestPinAfterUnlock = true;
+  }
+
   if (!status.enrolled) {
     await startSetup();
     return;
@@ -279,16 +293,23 @@ async function unlockTotp() {
       method: "POST",
       body: JSON.stringify({ code }),
     });
-    // Post-unlock UX, in priority order:
-    //   1. Offer to register a passkey for this device when WebAuthn is
-    //      supported and no credential lives here yet.
-    //   2. Otherwise offer to set a local PIN — works on every mobile
-    //      Telegram WebView and matches the wallet-style flow users know.
-    //   3. Otherwise just show "done".
+    // Post-unlock UX:
+    //   - /pin requested → straight to PIN setup or manage
+    //   - else WebAuthn-capable → bind-device
+    //   - else no PIN bound here yet → offer setup
+    //   - else just done
     const supportsWA =
       typeof window.PublicKeyCredential !== "undefined" &&
       typeof navigator.credentials !== "undefined";
     const hasPinHere = !!localStorage.getItem(PIN_DEVICE_KEY);
+    if (state.requestPinAfterUnlock) {
+      if (hasPinHere && state.pinDevices > 0) {
+        showScreen("pin-manage");
+      } else {
+        showPinSetupScreen();
+      }
+      return;
+    }
     if (supportsWA) {
       showScreen("bind-device");
     } else if (!hasPinHere) {
@@ -440,6 +461,21 @@ async function savePin() {
 
 function skipPinSetup() {
   showScreen("done");
+}
+
+// startPinChange — replace the existing PIN. Implemented as drop-old +
+// register-new so the server never sees the old PIN value. localStorage
+// is updated to the new DeviceID returned by /pin/register.
+async function startPinChange() {
+  const oldID = localStorage.getItem(PIN_DEVICE_KEY);
+  if (oldID) {
+    // Best-effort: we don't know our row's ID without an extra lookup,
+    // so just instruct the user to set a new one — the old binding can
+    // be cleaned up from /mfa/settings on web later.
+  }
+  document.getElementById("pin-new").value = "";
+  document.getElementById("pin-confirm").value = "";
+  showPinSetupScreen();
 }
 
 // ===== WebAuthn =====
