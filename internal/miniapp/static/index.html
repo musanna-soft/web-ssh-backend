@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Remofy — Qurilmani tasdiqlash</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--tg-theme-bg-color, #0f1419);
+    color: var(--tg-theme-text-color, #e7e9ea);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { padding: 24px 20px 40px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+  .sub { color: var(--tg-theme-hint-color, #71767b); font-size: 14px; margin-bottom: 24px; }
+  .card {
+    background: var(--tg-theme-secondary-bg-color, #16191c);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+  .card p { font-size: 14px; line-height: 1.5; color: var(--tg-theme-hint-color, #9ca3af); margin-bottom: 12px; }
+  .qr { display: block; width: 220px; height: 220px; margin: 16px auto; border-radius: 10px; background: #fff; padding: 8px; }
+  .secret {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 13px;
+    word-break: break-all;
+    background: var(--tg-theme-bg-color, #0f1419);
+    padding: 10px 12px;
+    border-radius: 8px;
+    text-align: center;
+    user-select: all;
+  }
+  input[type="text"], input[type="tel"] {
+    width: 100%;
+    background: var(--tg-theme-bg-color, #0f1419);
+    color: inherit;
+    border: 1px solid var(--tg-theme-section-separator-color, #2f3336);
+    border-radius: 10px;
+    font-size: 18px;
+    letter-spacing: 4px;
+    text-align: center;
+    padding: 14px 16px;
+    margin: 8px 0;
+    font-family: ui-monospace, monospace;
+  }
+  button {
+    width: 100%;
+    background: var(--tg-theme-button-color, #2ea6ff);
+    color: var(--tg-theme-button-text-color, #ffffff);
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--tg-theme-link-color, #2ea6ff);
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .error { color: #ef4444; font-size: 13px; margin-top: 6px; min-height: 1em; }
+  .ok    { color: #22c55e; font-size: 13px; margin-top: 6px; min-height: 1em; }
+  .codes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 12px 0;
+  }
+  .codes code {
+    font-family: ui-monospace, monospace;
+    font-size: 14px;
+    background: var(--tg-theme-bg-color, #0f1419);
+    padding: 8px 10px;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .hidden { display: none !important; }
+  .spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <h1>Qurilmani tasdiqlash</h1>
+  <p class="sub">Remofy hisobingizni xavfsiz saqlash uchun</p>
+
+  <div id="screen-loading" class="card">
+    <p><span class="spinner"></span> Telegram orqali kirilmoqda…</p>
+  </div>
+
+  <div id="screen-not-linked" class="card hidden">
+    <h2>Hisob bog'lanmagan</h2>
+    <p>Avval botda <code>/start</code> komandasini bosib Google akkauntingizni bog'lang, keyin qayta urinib ko'ring.</p>
+    <button onclick="closeApp()">Yopish</button>
+  </div>
+
+  <div id="screen-setup" class="card hidden">
+    <h2>1-qadam: Authenticator ilovasini sozlang</h2>
+    <p>Quyidagi QR kodni Microsoft Authenticator, Google Authenticator, Authy yoki shunga o'xshash ilovaga scan qiling.</p>
+    <img id="qr-img" class="qr" alt="QR" />
+    <p>Yoki kalitni qo'lda kiriting:</p>
+    <div id="secret-text" class="secret"></div>
+    <button onclick="showVerifyEnroll()">Davom etish</button>
+  </div>
+
+  <div id="screen-verify-enroll" class="card hidden">
+    <h2>2-qadam: 6-xonali kodni kiriting</h2>
+    <p>Authenticator ilovasi ko'rsatayotgan kodni kiriting.</p>
+    <input type="tel" id="enroll-code" maxlength="6" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" />
+    <button id="enroll-btn" onclick="verifyEnroll()">Tasdiqlash</button>
+    <div id="enroll-error" class="error"></div>
+  </div>
+
+  <div id="screen-recovery" class="card hidden">
+    <h2>Recovery kodlar</h2>
+    <p>Telefoningiz yo'qolsa shu kodlardan biri orqali kira olasiz. Har biri faqat <b>bir marta</b> ishlatiladi. Hozir saqlab oling — bu sahifa qayta ko'rsatilmaydi.</p>
+    <div id="recovery-list" class="codes"></div>
+    <button onclick="downloadRecovery()">Faylga yuklab olish</button>
+    <button class="secondary" onclick="finishEnroll()">Tushundim, davom etish</button>
+  </div>
+
+  <div id="screen-unlock" class="card hidden">
+    <h2>Qurilmani tasdiqlang</h2>
+    <p id="unlock-help">Authenticator ilovasidan 6-xonali kodni kiriting.</p>
+
+    <div id="unlock-webauthn" class="hidden">
+      <button id="webauthn-btn" onclick="unlockWebAuthn()">🔐 Biometrik bilan kirish (FaceID / Hello)</button>
+      <div id="webauthn-error" class="error"></div>
+      <button class="secondary" onclick="showTotpUnlock()">Authenticator kodini ishlatish</button>
+    </div>
+
+    <div id="unlock-totp">
+      <input type="tel" id="unlock-code" maxlength="6" inputmode="numeric" placeholder="000000" autocomplete="one-time-code" />
+      <button id="unlock-btn" onclick="unlockTotp()">Kirish</button>
+      <div id="unlock-error" class="error"></div>
+    </div>
+
+    <button class="secondary" onclick="showRecoveryInput()">Authenticator yo'qmi? Recovery kod ishlating</button>
+  </div>
+
+  <div id="screen-bind-device" class="card hidden">
+    <h2>Qurilmani biometrikaga bog'lang</h2>
+    <p>Endi shu qurilmangizni FaceID / Touch ID / Windows Hello / PIN bilan ishonchli qurilma sifatida ro'yxatdan o'tkazing. Keyingi safar 6-xonali kod talab qilinmaydi.</p>
+    <button id="bind-btn" onclick="bindDevice()">🔐 Qurilmani bog'lash</button>
+    <div id="bind-error" class="error"></div>
+    <button class="secondary" onclick="finishEnroll()">Keyingi safar</button>
+  </div>
+
+  <div id="screen-recovery-input" class="card hidden">
+    <h2>Recovery kod</h2>
+    <p>Enrollment paytida saqlagan kodlardan birini kiriting (masalan <code>abcd-efgh-1234</code>).</p>
+    <input type="text" id="recovery-input" placeholder="xxxx-xxxx-xxxx" autocomplete="off" />
+    <button onclick="unlockRecovery()">Kirish</button>
+    <div id="recovery-error" class="error"></div>
+    <button class="secondary" onclick="showScreen('unlock')">Orqaga</button>
+  </div>
+
+  <div id="screen-done" class="card hidden">
+    <h2>✅ Tayyor</h2>
+    <p>Qurilma tasdiqlandi. Botga qaytib ishni davom ettiring.</p>
+    <button onclick="closeApp()">Yopish</button>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>

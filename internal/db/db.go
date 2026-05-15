@@ -29,7 +29,15 @@ func Init() {
 
 	// Auto Migrate - Order matters! Migrate referenced tables first
 	// Folder must be migrated before Server because Server has a foreign key to Folder
-	err = DB.AutoMigrate(&models.User{}, &models.Folder{}, &models.Server{})
+	err = DB.AutoMigrate(
+		&models.User{},
+		&models.Folder{},
+		&models.Server{},
+		&models.MFAEnrollment{},
+		&models.WebAuthnCredential{},
+		&models.DeviceSession{},
+		&models.RecoveryCode{},
+	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
