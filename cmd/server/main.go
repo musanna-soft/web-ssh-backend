@@ -128,6 +128,7 @@ func registerMFARoutes(r *mux.Router, _ string) {
 	r.HandleFunc("/totp/verify", api.PostTOTPVerify).Methods("POST")
 	r.HandleFunc("/recovery/use", api.PostRecoveryUse).Methods("POST")
 	r.HandleFunc("/recovery/regenerate", api.PostRecoveryRegenerate).Methods("POST")
+	r.HandleFunc("/reset", api.PostMFAReset).Methods("POST")
 	r.HandleFunc("/lock", api.PostMFALock).Methods("POST")
 	r.HandleFunc("/devices", api.GetMFADevices).Methods("GET")
 	r.HandleFunc("/devices/{id}", api.DeleteMFADevice).Methods("DELETE")

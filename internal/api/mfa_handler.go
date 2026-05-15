@@ -386,6 +386,61 @@ func PostMFALock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ===== /api/mfa/reset =====
+
+// PostMFAReset wipes the caller's TOTP secret, all WebAuthn credentials,
+// all recovery codes, and all DeviceSessions, returning them to the
+// "never enrolled" state. Requires an active session on the current
+// surface so a stolen JWT or initData blob cannot trigger it.
+//
+// After reset the next gated request returns 403 mfa_required with
+// enrolled=false and the user goes through /mfa/setup again from scratch.
+func PostMFAReset(w http.ResponseWriter, r *http.Request) {
+	uid, ok := mfaUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	surface := mfaSurface(r)
+	if !auth.IsActive(uid, surface) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "mfa_required"})
+		return
+	}
+
+	// Delete in dependency order — none of these have FKs to each other
+	// but doing them in one transaction keeps the UI's status checks
+	// from briefly observing a half-reset state.
+	tx := db.DB.Begin()
+	if err := tx.Where("user_id = ?", uid).Delete(&models.RecoveryCode{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Where("user_id = ?", uid).Delete(&models.WebAuthnCredential{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Where("user_id = ?", uid).Delete(&models.DeviceSession{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Where("user_id = ?", uid).Delete(&models.MFAEnrollment{}).Error; err != nil {
+		tx.Rollback()
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit().Error; err != nil {
+		http.Error(w, "db commit", http.StatusInternalServerError)
+		return
+	}
+	auth.InvalidateActiveCache(uid, auth.SurfaceWeb)
+	auth.InvalidateActiveCache(uid, auth.SurfaceBot)
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // ===== /api/mfa/devices =====
 
 type deviceListEntry struct {

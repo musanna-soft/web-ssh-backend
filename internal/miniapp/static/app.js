@@ -9,6 +9,8 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const API_BASE = "/api/mfa/bot";
 let state = {
   enrolled: false,
+  hasDevices: false,
+  webauthnFailed: false, // set when auto-unlock can't find a credential on THIS device
   recoveryCodes: [],
 };
 
@@ -61,7 +63,8 @@ async function bootstrap() {
 function showUnlockScreen() {
   showScreen("unlock");
   // If the browser supports WebAuthn AND the user has at least one registered
-  // credential, prefer the biometric path. Otherwise hide it and show TOTP.
+  // credential (somewhere — maybe another device), try the biometric path.
+  // If it fails (this device has no matching passkey) fall back to TOTP.
   const supportsWA =
     typeof window.PublicKeyCredential !== "undefined" &&
     typeof navigator.credentials !== "undefined";
@@ -72,19 +75,44 @@ function showUnlockScreen() {
     wa.classList.remove("hidden");
     totp.classList.add("hidden");
     help.textContent = "Biometrik bilan kirish — qurilmangiz unlock'i so'raladi.";
-    // Trigger the FaceID / Hello prompt immediately. On iOS WKWebView the
-    // browser may refuse without a user gesture; in that case the user
-    // still sees the button and can tap it explicitly.
-    setTimeout(() => {
-      unlockWebAuthn().catch(() => {
-        /* error is rendered inside the unlock screen */
-      });
-    }, 150);
+    setTimeout(tryAutoUnlock, 150);
   } else {
     wa.classList.add("hidden");
     totp.classList.remove("hidden");
     setTimeout(() => document.getElementById("unlock-code").focus(), 120);
   }
+}
+
+async function tryAutoUnlock() {
+  // Auto-call navigator.credentials.get without the manual-click error
+  // pipeline. On failure (no passkey on THIS device, user cancelled,
+  // browser blocks unsolicited prompt) flip the unlock screen to TOTP
+  // with a translated explanation.
+  try {
+    const begin = await fetchJSON(`${API_BASE}/webauthn/login/begin`, { method: "POST" });
+    const opts = prepareGetOptions(begin.options);
+    const cred = await navigator.credentials.get({ publicKey: opts });
+    if (!cred) throw new Error("cancelled");
+    await fetchJSON(`${API_BASE}/webauthn/login/finish`, {
+      method: "POST",
+      body: JSON.stringify({
+        handle: begin.handle,
+        body: serializeAssertion(cred),
+      }),
+    });
+    showScreen("done");
+  } catch (e) {
+    state.webauthnFailed = true;
+    fallBackToTotp(e);
+  }
+}
+
+function fallBackToTotp(reason) {
+  document.getElementById("unlock-webauthn").classList.add("hidden");
+  document.getElementById("unlock-totp").classList.remove("hidden");
+  document.getElementById("unlock-help").textContent =
+    "Bu qurilmada biometrik kalit topilmadi. TOTP kodi bilan kiring — kirgandan keyin shu qurilmani ham bog'lashingiz mumkin.";
+  setTimeout(() => document.getElementById("unlock-code").focus(), 120);
 }
 
 function showTotpUnlock() {
@@ -200,14 +228,16 @@ async function unlockTotp() {
       method: "POST",
       body: JSON.stringify({ code }),
     });
-    // If the user enrolled but never bound a passkey, this is the moment
-    // to offer one — they have a fresh DeviceSession that the registration
-    // endpoint requires, and they've just proven they own the TOTP secret.
-    if (
-      !state.hasDevices &&
+    // Offer to bind a passkey on THIS device when either:
+    //   - the user has no credentials at all yet, OR
+    //   - they have credentials on other devices but this one came up empty
+    //     (auto-unlock failed before falling back to TOTP).
+    // Each device needs its own passkey — a Windows Hello credential
+    // doesn't materialise on the user's phone.
+    const supportsWA =
       typeof window.PublicKeyCredential !== "undefined" &&
-      typeof navigator.credentials !== "undefined"
-    ) {
+      typeof navigator.credentials !== "undefined";
+    if (supportsWA && (!state.hasDevices || state.webauthnFailed)) {
       showScreen("bind-device");
     } else {
       showScreen("done");
