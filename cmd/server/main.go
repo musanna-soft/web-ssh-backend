@@ -98,6 +98,9 @@ func main() {
 		AllowedOrigins:   origins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		// Without ExposedHeaders the browser strips the X-MFA-* headers,
+		// so the frontend can't see when it's in the grace period.
+		ExposedHeaders:   []string{"X-MFA-Required", "X-MFA-Warning", "X-MFA-Grace-Until"},
 		AllowCredentials: true,
 	})
 
