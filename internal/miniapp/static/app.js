@@ -228,16 +228,16 @@ async function unlockTotp() {
       method: "POST",
       body: JSON.stringify({ code }),
     });
-    // Offer to bind a passkey on THIS device when either:
-    //   - the user has no credentials at all yet, OR
-    //   - they have credentials on other devices but this one came up empty
-    //     (auto-unlock failed before falling back to TOTP).
-    // Each device needs its own passkey — a Windows Hello credential
-    // doesn't materialise on the user's phone.
+    // Offer to bind a passkey on THIS device after every TOTP unlock,
+    // as long as the platform supports WebAuthn. We can't reliably tell
+    // whether this specific device already has a credential (passkeys
+    // are per-device, not per-user) — if the user used TOTP, it's a
+    // safe bet biometric on this device would help. The bind screen has
+    // a "Keyingi safar" button for users who don't want to bind.
     const supportsWA =
       typeof window.PublicKeyCredential !== "undefined" &&
       typeof navigator.credentials !== "undefined";
-    if (supportsWA && (!state.hasDevices || state.webauthnFailed)) {
+    if (supportsWA) {
       showScreen("bind-device");
     } else {
       showScreen("done");
