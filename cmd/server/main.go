@@ -38,8 +38,11 @@ func main() {
 	r := mux.NewRouter()
 
 	// Auth Routes
-	r.HandleFunc("/auth/google/login", auth.HandleGoogleLogin).Methods("GET")
-	r.HandleFunc("/auth/google/callback", auth.HandleGoogleCallback).Methods("GET")
+	// Kirish musanna-platforma orqali (OIDC + PKCE). Eski `/auth/google/*` yo'llari
+	// ATAYLAB qoldirilmadi: ular ishlashda davom etsa, brauzerda saqlanib qolgan eski
+	// havola odamni jimgina Google oqimiga qaytarardi va u yerda hech nima ishlamasdi.
+	r.HandleFunc("/auth/musanna/login", auth.HandleLogin).Methods("GET")
+	r.HandleFunc("/auth/musanna/callback", auth.HandleCallback).Methods("GET")
 
 	// MFA bootstrap (Telegram Mini App entry point — no JWT, initData is the proof)
 	r.HandleFunc("/api/mfa/verify-telegram", auth.VerifyTelegramAndMint).Methods("POST")

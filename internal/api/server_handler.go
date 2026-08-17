@@ -43,6 +43,40 @@ func CreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// PLAN LIMIT. The count is taken here, under the caller's own user id, so
+	// one person's servers can never be charged against another's allowance.
+	//
+	// Zero means the plan stated no limit — read as unlimited, matching the
+	// platform's rule that an absent limit is not a zero limit.
+	var user models.User
+	if err := db.DB.First(&user, uint(userID)).Error; err != nil {
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
+	if user.ServerLimit > 0 {
+		var count int64
+		if err := db.DB.Model(&models.Server{}).
+			Where("user_id = ?", uint(userID)).Count(&count).Error; err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if count >= user.ServerLimit {
+			// 402: this is not "forbidden" (the person may add servers, just
+			// not on this plan) and not "conflict" — it is a payment problem.
+			// The message names the way out.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "server_limit_reached",
+				"limit": user.ServerLimit,
+				"plan":  user.PlanCode,
+			})
+			return
+		}
+	}
+
 	encryptedSecret, err := crypto.Encrypt(req.Secret)
 	if err != nil {
 		http.Error(w, "Failed to encrypt secret", http.StatusInternalServerError)
