@@ -15,6 +15,7 @@ package musanna
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,6 +30,11 @@ const AppCode = "webssh"
 // carries limits as an opaque map on purpose: it has no idea what a "server" is
 // and does not need to, which is why a new limit never needs a platform change.
 const ServersLimitKey = "servers"
+
+// ErrNotPermitted — platforma savolning O'ZIGA ruxsat bermadi (401/403), ya'ni javob
+// "tarif yo'q" emas. Chaqiruvchi buni tarmoq uzilishidan ajratishi kerak: birinchisi
+// sozlama xatosi va u o'z-o'zidan tuzalmaydi, ikkinchisi esa o'tib ketadi.
+var ErrNotPermitted = errors.New("musanna: not permitted to ask")
 
 // Entitlement is the slice of the platform's answer this app acts on.
 type Entitlement struct {
@@ -80,6 +86,18 @@ func Check(authority, accessToken string) (Entitlement, error) {
 		return Entitlement{}, fmt.Errorf("authorize request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// 403 ni ALOHIDA ajratamiz.
+	//
+	// Bu "tarifingiz yo'q" degani EMAS — tarifsiz odam 200 va `isEntitled: false` oladi.
+	// 403 esa "bu token bu savolni so'ray olmaydi": platformada endpoint `SelfApp` siyosati
+	// bilan yopilgan va u bearer'dan `platform.api`/`platform.me` scope'ini talab qiladi.
+	// Ya'ni bu BIZNING sozlama xatomiz va uni tarmoq uzilishi bilan bir xil xabar ostida
+	// ko'rsatish to'lagan mijozni "keyinroq urinib ko'ring" deb quvib yuborardi.
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return Entitlement{}, fmt.Errorf("%w: authorize returned http %d (token'da `platform.me` scope'i bormi?)",
+			ErrNotPermitted, resp.StatusCode)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return Entitlement{}, fmt.Errorf("authorize returned http %d", resp.StatusCode)

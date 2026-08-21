@@ -14,7 +14,13 @@ type User struct {
 	// there. It replaced GoogleID when login moved to the platform IdP. The
 	// subject is stable across e-mail changes, and unlike the Google id it is
 	// issued by the same system that owns organisations, roles and MFA.
-	PlatformSub string `gorm:"column:platform_sub;uniqueIndex;not null" json:"platform_sub"`
+	// The unique index is created by hand in db.Migrate, not by this tag, and it is
+	// PARTIAL: it covers only rows that actually carry a subject. A plain unique index
+	// could not be added at all — the 28 rows that predate musanna login all get the
+	// empty default, and a unique constraint over 28 identical values fails on the spot,
+	// taking the whole startup down with it. Those rows keep the empty string until their
+	// owner signs in once and the row is adopted by e-mail (see auth.adoptOrCreate).
+	PlatformSub string `gorm:"column:platform_sub;not null;default:''" json:"platform_sub"`
 
 	Email     string `gorm:"uniqueIndex;not null" json:"email"`
 	Name      string `json:"name"`

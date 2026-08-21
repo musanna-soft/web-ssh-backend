@@ -57,5 +57,20 @@ func Init() {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Partial unique index on the platform subject.
+	//
+	// It cannot be a plain unique index: rows created before login moved to musanna carry
+	// an empty subject, and there are 28 of them. `WHERE platform_sub <> ''` leaves those
+	// alone while still guaranteeing that one musanna account maps to at most one row here.
+	//
+	// The rows fill in as people sign in: the first login matches by e-mail and writes the
+	// subject onto the existing row, so nobody loses their servers.
+	if err := DB.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_sub
+		ON users (platform_sub) WHERE platform_sub <> ''
+	`).Error; err != nil {
+		log.Fatalf("Failed to create platform_sub index: %v", err)
+	}
+
 	log.Println("Database migration completed")
 }
