@@ -23,8 +23,8 @@ import (
 )
 
 // AppCode is this app's code in the platform catalogue. It must match the
-// `webssh` row there — the catalogue is what the plans hang off.
-const AppCode = "webssh"
+// `remofy` row there — the catalogue is what the plans hang off.
+const AppCode = "remofy"
 
 // ServersLimitKey is the resource limit web-ssh understands. The platform
 // carries limits as an opaque map on purpose: it has no idea what a "server" is
