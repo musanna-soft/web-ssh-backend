@@ -10,7 +10,6 @@ import (
 	"web-ssh-backend/internal/auth"
 	"web-ssh-backend/internal/crypto"
 	"web-ssh-backend/internal/db"
-	"web-ssh-backend/internal/miniapp"
 	"web-ssh-backend/internal/sftp"
 	"web-ssh-backend/internal/ssh"
 
@@ -32,8 +31,6 @@ func main() {
 	db.Init()
 	auth.Init()
 	crypto.Init()
-	auth.StartMFASweeper()
-	auth.StartWebAuthnSweeper()
 
 	r := mux.NewRouter()
 
@@ -44,28 +41,16 @@ func main() {
 	r.HandleFunc("/auth/musanna/login", auth.HandleLogin).Methods("GET")
 	r.HandleFunc("/auth/musanna/callback", auth.HandleCallback).Methods("GET")
 
-	// MFA bootstrap (Telegram Mini App entry point — no JWT, initData is the proof)
-	r.HandleFunc("/api/mfa/verify-telegram", auth.VerifyTelegramAndMint).Methods("POST")
-
-	// Mini App static assets (HTML/JS embedded into the binary)
-	r.PathPrefix("/mfa/bot/").Handler(miniapp.Handler())
-
-	// MFA routes for the Telegram bot surface — require the mfa_session cookie
-	// minted by /api/mfa/verify-telegram. These do NOT pass through the JWT
-	// AuthMiddleware because Mini App users are identified via initData only.
-	botMFARouter := r.PathPrefix("/api/mfa/bot").Subrouter()
-	botMFARouter.Use(auth.RequireMFASessionCookie)
-	registerMFARoutes(botMFARouter, "bot")
+	// MFA yuzasi BUTUNLAY olib tashlandi — veb ekranlari ham, Telegram Mini App'i ham.
+	//
+	// Ikki bosqichli tasdiqlash musanna hisobining ishi (`me.musanna.uz`). Remofy'ning
+	// o'z qulfi ikkinchi, mustaqil sir edi: odam qaysi birini yoqqanini eslay olmas,
+	// yo'qotsa ikkalasini alohida tiklashi kerak bo'lardi. Telegram yuzasi esa uchinchi
+	// kanal qo'shardi — bir xil hisobga uchta turli yo'l bilan qulf.
 
 	// API Routes (Protected)
 	apiRouter := r.PathPrefix("/api").Subrouter()
 	apiRouter.Use(auth.AuthMiddleware)
-	apiRouter.Use(auth.MFAGate)
-
-	// MFA routes for the web surface — under /api so the JWT middleware
-	// applies. The MFAGate above exempts /api/mfa/* paths.
-	webMFARouter := apiRouter.PathPrefix("/mfa").Subrouter()
-	registerMFARoutes(webMFARouter, "web")
 	apiRouter.HandleFunc("/servers", api.GetServers).Methods("GET")
 	apiRouter.HandleFunc("/servers", api.CreateServer).Methods("POST")
 	apiRouter.HandleFunc("/servers", api.UpdateServer).Methods("PUT")
@@ -101,9 +86,6 @@ func main() {
 		AllowedOrigins:   origins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
-		// Without ExposedHeaders the browser strips the X-MFA-* headers,
-		// so the frontend can't see when it's in the grace period.
-		ExposedHeaders:   []string{"X-MFA-Required", "X-MFA-Warning", "X-MFA-Grace-Until"},
 		AllowCredentials: true,
 	})
 
@@ -120,27 +102,3 @@ func main() {
 	}
 }
 
-// registerMFARoutes wires the /mfa/* endpoints onto the given subrouter.
-// Called twice — once under /api (web surface, JWT-authenticated) and once
-// under /api/mfa/bot (Telegram surface, cookie-authenticated). The handlers
-// themselves read the surface from request context, so the same code paths
-// serve both call sites.
-func registerMFARoutes(r *mux.Router, _ string) {
-	r.HandleFunc("/status", api.GetMFAStatus).Methods("GET", "POST")
-	r.HandleFunc("/totp/setup", api.PostTOTPSetup).Methods("POST")
-	r.HandleFunc("/totp/verify", api.PostTOTPVerify).Methods("POST")
-	r.HandleFunc("/recovery/use", api.PostRecoveryUse).Methods("POST")
-	r.HandleFunc("/recovery/regenerate", api.PostRecoveryRegenerate).Methods("POST")
-	r.HandleFunc("/reset", api.PostMFAReset).Methods("POST")
-	r.HandleFunc("/lock", api.PostMFALock).Methods("POST")
-	r.HandleFunc("/devices", api.GetMFADevices).Methods("GET")
-	r.HandleFunc("/devices/{id}", api.DeleteMFADevice).Methods("DELETE")
-	r.HandleFunc("/webauthn/register/begin", api.PostWebAuthnRegisterBegin).Methods("POST")
-	r.HandleFunc("/webauthn/register/finish", api.PostWebAuthnRegisterFinish).Methods("POST")
-	r.HandleFunc("/webauthn/login/begin", api.PostWebAuthnLoginBegin).Methods("POST")
-	r.HandleFunc("/webauthn/login/finish", api.PostWebAuthnLoginFinish).Methods("POST")
-	r.HandleFunc("/pin/register", api.PostPinRegister).Methods("POST")
-	r.HandleFunc("/pin/unlock", api.PostPinUnlock).Methods("POST")
-	r.HandleFunc("/pin/devices", api.GetPinDevices).Methods("GET")
-	r.HandleFunc("/pin/devices/{id}", api.DeletePinDevice).Methods("DELETE")
-}

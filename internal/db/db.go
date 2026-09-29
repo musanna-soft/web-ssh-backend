@@ -47,11 +47,6 @@ func Init() {
 		&models.User{},
 		&models.Folder{},
 		&models.Server{},
-		&models.MFAEnrollment{},
-		&models.WebAuthnCredential{},
-		&models.DeviceSession{},
-		&models.RecoveryCode{},
-		&models.DevicePin{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
