@@ -296,6 +296,23 @@ func adoptOrCreate(info *PlatformUserInfo) (*models.User, error) {
 
 	err := db.DB.Where("platform_sub = ?", info.Sub).First(&user).Error
 	if err == nil {
+		// Ism va rasm HAR kirishda yangilanadi.
+		//
+		// Ilgari bu shox yozuvni shunchaki qaytarardi, ya'ni profil platformada
+		// o'zgarsa remofy eski nusxada qolardi — va bu abadiy edi: `platform_sub`
+		// topilgach quyidagi shoxlarga umuman tushmaydi. Avatar aynan shu sababli
+		// hech qachon paydo bo'lmasdi: `picture` claim'i qo'shilgandan keyin ham
+		// eski, bo'sh qiymat o'z joyida qolardi.
+		if user.Name != info.Name || user.AvatarURL != info.Picture {
+			user.Name = info.Name
+			user.AvatarURL = info.Picture
+			if err := db.DB.Model(&user).Updates(map[string]any{
+				"name":       user.Name,
+				"avatar_url": user.AvatarURL,
+			}).Error; err != nil {
+				return nil, err
+			}
+		}
 		return &user, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
