@@ -49,6 +49,15 @@ type Entitlement struct {
 	// the plan" and is treated as UNLIMITED, matching the platform's own rule
 	// for quotas: an absent limit is not a zero limit.
 	Servers int64
+
+	// MfaEnabled — musanna hisobida ikki bosqichli tasdiqlash yoqilganmi.
+	//
+	// Remofy serverlarga SSH ochadi: o'g'irlangan parol bu yerda butun parkka kalit
+	// beradi. Shuning uchun MFA shart. Lekin qulf SHU YERDA qurilmaydi — u musanna
+	// hisobida bir joyda yoqiladi (`me.musanna.uz`), biz faqat holatga qaraymiz.
+	// Ilgari remofy o'z MFA'sini olib yurardi: ikkinchi mustaqil sir, o'z zaxira
+	// kodlari, o'z Telegram yuzasi — odam qaysi birini yoqqanini eslay olmasdi.
+	MfaEnabled bool
 }
 
 type authorizeResponse struct {
@@ -57,6 +66,7 @@ type authorizeResponse struct {
 		PlanCode   string           `json:"planCode"`
 		Limits     map[string]int64 `json:"limits"`
 	} `json:"entitlement"`
+	MfaEnabled bool `json:"mfaEnabled"`
 }
 
 // Check asks the platform about the holder of accessToken.
@@ -109,8 +119,9 @@ func Check(authority, accessToken string) (Entitlement, error) {
 	}
 
 	return Entitlement{
-		Entitled: body.Entitlement.IsEntitled,
-		PlanCode: body.Entitlement.PlanCode,
-		Servers:  body.Entitlement.Limits[ServersLimitKey],
+		Entitled:   body.Entitlement.IsEntitled,
+		PlanCode:   body.Entitlement.PlanCode,
+		Servers:    body.Entitlement.Limits[ServersLimitKey],
+		MfaEnabled: body.MfaEnabled,
 	}, nil
 }

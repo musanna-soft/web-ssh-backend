@@ -187,6 +187,28 @@ func HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// MFA SHART.
+	//
+	// Remofy serverlarga SSH ochadi: bu yerda o'g'irlangan parol bitta hisobni emas,
+	// butun server parkini beradi. Shuning uchun ikki bosqichli tasdiqlashsiz kiritmaymiz.
+	//
+	// Qulf musanna hisobida yoqiladi va SHU YERDA qurilmaydi. Ilgari remofy o'z MFA'sini
+	// olib yurardi — ikkinchi mustaqil sir, o'z zaxira kodlari, o'z Telegram yuzasi — va
+	// odam qaysi birini yoqqanini eslay olmasdi. Endi fakt platformadan keladi, qaror
+	// esa shu yerda: talab APPNING siyosati.
+	//
+	// Tekshiruv ESHIKDA: ichkariga kiritib, keyin har amalni rad etish buzuq mahsulotga
+	// o'xshaydi.
+	if !entitlement.MfaEnabled {
+		failLogin(w, r, http.StatusForbidden,
+			"Ikki bosqichli tasdiqlash shart",
+			"Remofy serverlaringizga SSH ochadi, shuning uchun u MFA'siz ishlamaydi. "+
+				"Musanna hisobingizda ikki bosqichli tasdiqlashni yoqing "+
+				"(me.musanna.uz → Xavfsizlik), keyin qaytadan kiring.",
+			"")
+		return
+	}
+
 	// Match on the platform subject, never on the e-mail: an address can be
 	// reassigned to a different person, the subject cannot.
 	user, err := adoptOrCreate(userInfo)
